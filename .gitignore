@@ -1,0 +1,32 @@
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Virtual envs
+.venv/
+venv/
+env/
+
+# Test / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.ruff_cache/
+
+# Index persistence artifacts (Phase 2+)
+*.vfidx
+data/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+
+# Env files
+.env
