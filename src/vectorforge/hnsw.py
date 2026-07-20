@@ -13,24 +13,24 @@ probabilistic layer assignment and per-layer neighbour lists.
 
 Key parameters
 --------------
-M : int
+m : int
     Maximum number of bidirectional connections per node (default 16).
-    Higher M → better recall, more memory, slower insert.
+    Higher m → better recall, more memory, slower insert.
 ef_construction : int
     Size of the dynamic candidate list used during index construction
     (default 200). Higher → better recall at query time, slower insert.
-    Must be >= M.
+    Must be >= m.
 
 Complexity (single-layer, N nodes, dim D)
 -----------------------------------------
-Insert  : O(M · ef_construction · D)  average
-Search  : O(M · ef · D)               average
+Insert  : O(m · ef_construction · D)  average
+Search  : O(m · ef · D)               average
 """
 
 from __future__ import annotations
 
-import heapq
 from dataclasses import dataclass, field
+import heapq
 
 import numpy as np
 from numpy.typing import NDArray
@@ -71,7 +71,7 @@ class HNSWIndex:
     ----------
     dim : int
         Vector dimensionality.  All inserted vectors must match.
-    M : int
+    m : int
         Max connections per node.  16 is a good default for most datasets.
     ef_construction : int
         Candidate list size during construction.  200 is a good default.
@@ -79,7 +79,7 @@ class HNSWIndex:
     Example
     -------
     >>> import numpy as np
-    >>> idx = HNSWIndex(dim=4, M=4, ef_construction=20)
+    >>> idx = HNSWIndex(dim=4, m=4, ef_construction=20)
     >>> idx.add("a", np.array([1, 0, 0, 0], dtype=np.float32))
     >>> idx.add("b", np.array([0, 1, 0, 0], dtype=np.float32))
     >>> results = idx.search(np.array([1, 0, 0, 0], dtype=np.float32), k=1)
@@ -87,16 +87,16 @@ class HNSWIndex:
     'a'
     """
 
-    def __init__(self, dim: int, M: int = 16, ef_construction: int = 200) -> None:
+    def __init__(self, dim: int, m: int = 16, ef_construction: int = 200) -> None:
         if dim < 1:
             raise ValueError(f"dim must be >= 1, got {dim}")
-        if M < 2:
-            raise ValueError(f"M must be >= 2, got {M}")
-        if ef_construction < M:
-            raise ValueError(f"ef_construction ({ef_construction}) must be >= M ({M})")
+        if m < 2:
+            raise ValueError(f"m must be >= 2, got {m}")
+        if ef_construction < m:
+            raise ValueError(f"ef_construction ({ef_construction}) must be >= m ({m})")
 
         self.dim = dim
-        self.M = M
+        self.m = m
         self.ef_construction = ef_construction
 
         self._nodes: dict[int, _Node] = {}          # internal_id → _Node
@@ -114,8 +114,8 @@ class HNSWIndex:
         1. Assign an internal id and create a node.
         2. If the graph is empty, make this node the entry point and return.
         3. Greedily search layer 0 for ef_construction neighbours.
-        4. Select the M closest as bidirectional connections.
-        5. Prune any neighbour whose connection count exceeds M.
+        4. Select the m closest as bidirectional connections.
+        5. Prune any neighbour whose connection count exceeds m.
         """
         vector = np.asarray(vector, dtype=np.float32)
         if vector.shape != (self.dim,):
@@ -144,17 +144,17 @@ class HNSWIndex:
             ef=self.ef_construction,
         )
 
-        # Step 4 : select M closest and wire bidirectional edges
-        neighbours = self._select_neighbours(candidates, m=self.M)
+        # Step 4 : select m closest and wire bidirectional edges
+        neighbours = self._select_neighbours(candidates, m=self.m)
         for nb_iid, _ in neighbours:
             node.neighbors.add(nb_iid)
             self._nodes[nb_iid].neighbors.add(iid)
 
-        # Step 5 : prune any neighbour that now exceeds M connections
+        # Step 5 : prune any neighbour that now exceeds m connections
         for nb_iid, _ in neighbours:
             nb_node = self._nodes[nb_iid]
-            if len(nb_node.neighbors) > self.M:
-                nb_node.neighbors = self._prune_neighbors(nb_node, m=self.M)
+            if len(nb_node.neighbors) > self.m:
+                nb_node.neighbors = self._prune_neighbors(nb_node, m=self.m)
 
     def search(
         self, query: NDArray[np.float32], k: int, ef: int | None = None
@@ -219,7 +219,7 @@ class HNSWIndex:
 
     def __repr__(self) -> str:
         return (
-            f"HNSWIndex(dim={self.dim}, M={self.M}, "
+            f"HNSWIndex(dim={self.dim}, m={self.m}, "
             f"ef_construction={self.ef_construction}, size={len(self)})"
         )
 
