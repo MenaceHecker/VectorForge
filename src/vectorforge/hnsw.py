@@ -29,8 +29,8 @@ Search  : O(m · ef · D)               average
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 import heapq
+from dataclasses import dataclass, field
 
 import numpy as np
 from numpy.typing import NDArray
