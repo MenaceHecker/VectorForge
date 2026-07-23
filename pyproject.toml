@@ -32,7 +32,14 @@ target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "N"]
-ignore = []
+ignore = [
+    # M is the canonical parameter name from the Malkov & Yashunin (2018) paper.
+    # Renaming it to `m` throughout would make the code harder to cross-reference
+    # against the algorithm definitions.
+    "N802",   # function name should be lowercase (test names containing M)
+    "N803",   # argument name should be lowercase (M parameter)
+    "N806",   # variable in function should be lowercase (M in persistence.py)
+]
 
 [tool.ruff.lint.isort]
 known-first-party = ["vectorforge"]
