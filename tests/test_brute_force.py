@@ -1,6 +1,7 @@
 """Tests for the brute-force k-NN index and distance metrics.
 
-These tests double as the recall ground-truth contract
+These tests double as the recall ground-truth contract: any behaviour
+asserted here is what HNSW results will be measured against in Phase 2.
 """
 
 from __future__ import annotations
@@ -41,7 +42,8 @@ def test_cosine_zero_vector_returns_one():
     b = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
     assert cosine(a, b) == 1.0
 
-# BruteForceIndex : construction
+
+# BruteForceIndex — construction
 
 
 def test_index_starts_empty():
@@ -53,8 +55,7 @@ def test_invalid_dim_raises():
     with pytest.raises(ValueError, match="dim must be >= 1"):
         BruteForceIndex(dim=0)
 
-# BruteForceIndex : add
-
+# BruteForceIndex — add
 
 
 def test_add_increases_size():
@@ -119,7 +120,8 @@ def test_search_invalid_k_raises():
     with pytest.raises(ValueError, match="k must be >= 1"):
         idx.search(np.zeros(4, dtype=np.float32), k=0)
 
-# BruteForceIndex : delete
+
+# BruteForceIndex — delete
 
 
 def test_delete_removes_vector():
@@ -148,7 +150,7 @@ def test_deleted_vector_not_returned_in_search():
 
 
 def test_recall_at_10_is_perfect_for_brute_force():
-    """BruteForceIndex must achieve 100% recall@10"""
+    """BruteForceIndex must achieve 100% recall@10 — it is the ground truth."""
     rng = np.random.default_rng(0)
     dim = 128
     n = 1_000
