@@ -47,7 +47,9 @@ from dataclasses import dataclass, field
 import numpy as np
 from numpy.typing import NDArray
 
+# ---------------------------------------------------------------------------
 # Internal node representation
+# ---------------------------------------------------------------------------
 
 
 @dataclass
@@ -80,7 +82,10 @@ class _Node:
         for layer in range(self.level + 1):
             self.neighbors[layer] = set()
 
+
+# ---------------------------------------------------------------------------
 # HNSW index
+# ---------------------------------------------------------------------------
 
 
 class HNSWIndex:
@@ -130,7 +135,10 @@ class HNSWIndex:
         self._next_id: int = 0
         self._rng = np.random.default_rng()
 
+    # ------------------------------------------------------------------
     # Public API
+    # ------------------------------------------------------------------
+
     def add(self, vector_id: str, vector: NDArray[np.float32]) -> None:
         """Insert *vector* into the index under *vector_id*.
 
@@ -260,6 +268,9 @@ class HNSWIndex:
         neighbours) but is skipped during candidate evaluation and
         never returned in search results.
 
+        Phase 3 will add optional graph compaction to reclaim memory
+        after many deletes.
+
         Returns ``True`` if the id existed, ``False`` otherwise.
         """
         iid = self._id_map.get(vector_id)
@@ -283,7 +294,9 @@ class HNSWIndex:
             f"max_layer={self._max_layer}, size={len(self)})"
         )
 
+    # ------------------------------------------------------------------
     # Core graph algorithm (internal)
+    # ------------------------------------------------------------------
 
     def _dist(self, a: NDArray[np.float32], b: NDArray[np.float32]) -> float:
         """L2 distance — kept inline for hot-path performance."""
