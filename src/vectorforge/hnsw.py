@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import heapq
 import math
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -67,6 +68,10 @@ class _Node:
         The embedding, stored by value.
     level : int
         Highest layer this node participates in.  Assigned once at insert.
+    metadata : dict | None
+        Optional caller-supplied key/value payload attached to the vector.
+        Used for predicate filtering at search time.  ``None`` means no
+        metadata was provided (predicates then see an empty dict).
     neighbors : dict[int, set[int]]
         Per-layer neighbour sets: ``neighbors[layer]`` → set of internal_ids.
         Populated for layers 0 … level inclusive.
@@ -76,6 +81,7 @@ class _Node:
     vector_id: str
     vector: NDArray[np.float32]
     level: int
+    metadata: dict | None = None
     neighbors: dict[int, set[int]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -139,7 +145,12 @@ class HNSWIndex:
     # Public API
     # ------------------------------------------------------------------
 
-    def add(self, vector_id: str, vector: NDArray[np.float32]) -> None:
+    def add(
+        self,
+        vector_id: str,
+        vector: NDArray[np.float32],
+        metadata: dict | None = None,
+    ) -> None:
         """Insert *vector* into the index under *vector_id*.
 
         Implements Algorithm 1 from the paper:
@@ -154,6 +165,14 @@ class HNSWIndex:
            connection cap.
         4. If *l* exceeds the current max layer, promote the new node to
            be the graph entry point.
+
+        Parameters
+        ----------
+        metadata : dict, optional
+            Arbitrary JSON-serialisable key/value payload stored alongside
+            the vector.  A shallow copy is taken so later caller-side
+            mutation does not leak into the index.  Filterable at search
+            time via the ``predicate`` argument to :meth:`search`.
         """
         vector = np.asarray(vector, dtype=np.float32)
         if vector.shape != (self.dim,):
@@ -168,7 +187,13 @@ class HNSWIndex:
 
         iid = self._next_id
         self._next_id += 1
-        node = _Node(internal_id=iid, vector_id=vector_id, vector=vector.copy(), level=level)
+        node = _Node(
+            internal_id=iid,
+            vector_id=vector_id,
+            vector=vector.copy(),
+            level=level,
+            metadata=dict(metadata) if metadata is not None else None,
+        )
         self._nodes[iid] = node
         self._id_map[vector_id] = iid
 
@@ -213,7 +238,11 @@ class HNSWIndex:
             self._max_layer = level
 
     def search(
-        self, query: NDArray[np.float32], k: int, ef: int | None = None
+        self,
+        query: NDArray[np.float32],
+        k: int,
+        ef: int | None = None,
+        predicate: Callable[[dict], bool] | None = None,
     ) -> list[tuple[str, float]]:
         """Return the *k* approximate nearest neighbours of *query*.
 
@@ -232,6 +261,15 @@ class HNSWIndex:
         ef : int, optional
             Search candidate list size.  Larger ef → better recall, higher
             latency.  Defaults to ``max(k, ef_construction)``.
+        predicate : callable, optional
+            Metadata filter ``dict -> bool``.  When supplied, a node is only
+            admitted to the result set if ``predicate(node.metadata or {})``
+            is truthy.  Non-matching nodes remain *navigable* (the walk still
+            traverses through them) so connectivity — and therefore recall —
+            is preserved; they are simply never returned.  Note the standard
+            filtered-ANN caveat: a highly selective predicate may force a much
+            wider layer-0 walk to gather *k* matches, and may still return
+            fewer than *k* if the corpus lacks that many matching vectors.
         """
         if k < 1:
             raise ValueError(f"k must be >= 1, got {k}")
@@ -246,20 +284,21 @@ class HNSWIndex:
         ef = ef or max(k, self.ef_construction)
         ep = self._entry_point
 
-        # Coarse descent through layers above 0
+        # Coarse descent through layers above 0 — unfiltered navigation.
         for layer in range(self._max_layer, 0, -1):
             candidates = self._search_layer(query, ep, ef=1, layer=layer)
             ep = min(candidates, key=lambda x: x[1])[0]
 
-        # Full beam search at layer 0
-        candidates = self._search_layer(query, ep, ef=ef, layer=0)
+        # Full beam search at layer 0, applying the metadata predicate.
+        candidates = self._search_layer(query, ep, ef=ef, layer=0, predicate=predicate)
         candidates.sort(key=lambda x: x[1])
 
-        return [
-            (self._nodes[iid].vector_id, dist)
-            for iid, dist in candidates[:k]
-            if iid not in self._deleted
+        # Filter *before* truncating so ineligible nodes never consume a
+        # top-k slot that an eligible-but-slightly-farther node deserves.
+        eligible = [
+            (iid, dist) for iid, dist in candidates if self._is_eligible(iid, predicate)
         ]
+        return [(self._nodes[iid].vector_id, dist) for iid, dist in eligible[:k]]
 
     def delete(self, vector_id: str) -> bool:
         """Tombstone *vector_id* so it is excluded from future results.
@@ -278,6 +317,22 @@ class HNSWIndex:
             return False
         self._deleted.add(iid)
         return True
+
+    def get_metadata(self, vector_id: str) -> dict | None:
+        """Return a copy of the metadata stored for *vector_id*.
+
+        Returns ``None`` if the id has no metadata attached.
+
+        Raises
+        ------
+        KeyError
+            If *vector_id* is not present in the index.
+        """
+        iid = self._id_map.get(vector_id)
+        if iid is None:
+            raise KeyError(vector_id)
+        meta = self._nodes[iid].metadata
+        return dict(meta) if meta is not None else None
 
     @property
     def max_layer(self) -> int:
@@ -303,12 +358,28 @@ class HNSWIndex:
         diff = a - b
         return float(np.sqrt(np.dot(diff, diff)))
 
+    def _is_eligible(
+        self, iid: int, predicate: Callable[[dict], bool] | None
+    ) -> bool:
+        """Whether node *iid* may be admitted to a result set.
+
+        A node is eligible iff it is not tombstoned and — when a *predicate*
+        is given — its metadata satisfies it.  Nodes with no metadata are
+        tested against an empty dict so predicates never raise on ``None``.
+        """
+        if iid in self._deleted:
+            return False
+        if predicate is None:
+            return True
+        return bool(predicate(self._nodes[iid].metadata or {}))
+
     def _search_layer(
         self,
         query: NDArray[np.float32],
         entry_point: int,
         ef: int,
         layer: int,
+        predicate: Callable[[dict], bool] | None = None,
     ) -> list[tuple[int, float]]:
         """Beam search on *layer* starting from *entry_point*.
 
@@ -319,10 +390,16 @@ class HNSWIndex:
         - ``found``:      max-heap by *negative* distance — the current
                           best-ef set; we evict the furthest when |found|>ef.
 
+        The entry point is always seeded into ``found`` so callers that take
+        ``min(result)`` (the coarse-descent passes) never see an empty list.
+        Eligibility (tombstone + optional *predicate*) gates only which
+        *neighbours* are admitted; ineligible nodes are still traversed for
+        connectivity and are filtered out by the caller.
+
         Returns
         -------
-        List of (internal_id, distance) — up to ef live (non-tombstoned)
-        nodes closest to *query* found during the walk.
+        List of (internal_id, distance) — up to ef nodes closest to *query*
+        found during the walk, plus the entry point.
         """
         ep_dist = self._dist(query, self._nodes[entry_point].vector)
 
@@ -348,8 +425,8 @@ class HNSWIndex:
 
                 if nb_dist < f_dist or len(found) < ef:
                     heapq.heappush(candidates, (nb_dist, nb_iid))
-                    # Only add to found if not tombstoned
-                    if nb_iid not in self._deleted:
+                    # Only collect eligible (live + predicate-matching) nodes.
+                    if self._is_eligible(nb_iid, predicate):
                         heapq.heappush(found, (-nb_dist, nb_iid))
                         if len(found) > ef:
                             heapq.heappop(found)
