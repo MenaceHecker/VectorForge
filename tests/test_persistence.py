@@ -1,13 +1,13 @@
 """Tests for disk persistence (save / load round-trips).
 
 Covers:
-- Full round-trip: results before save == results after load
-- Metadata preserved: dim, M, ef_construction, max_layer
-- Deleted set preserved across round-trip
-- Empty index round-trip
-- Single-node index round-trip
-- Corrupt magic / wrong version raise ValueError
-- Atomic write: .tmp file does not linger on success
+1. Full round-trip: results before save == results after load
+2. Metadata preserved: dim, M, ef_construction, max_layer
+3. Deleted set preserved across round-trip
+4. Empty index round-trip
+5. Single-node index round-trip
+6. Corrupt magic / wrong version raise ValueError
+7. Atomic write: .tmp file does not linger on success
 """
 
 from __future__ import annotations
