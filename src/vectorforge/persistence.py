@@ -27,6 +27,8 @@ NODE RECORDS  (num_nodes entries, variable length)
   vid_len            H
   vid                <vid_len bytes, UTF-8>
   vector             <dim × 4 bytes, float32 little-endian>
+  meta_len           I       (v2+ only) byte length of the JSON blob; 0 = None
+  meta               <meta_len bytes, UTF-8 JSON>   (v2+ only, omitted if 0)
   for layer in 0 … level:
     num_neighbors    I
     neighbors        <num_neighbors × 8 bytes, uint64>
@@ -35,16 +37,25 @@ DELETED SET  (at end of file)
   num_deleted        Q       (same value as header num_del, for verification)
   deleted_ids        <num_deleted × 8 bytes, uint64>
 
+Versioning
+  v1 — no per-node metadata (the meta_len/meta fields are absent).
+  v2 — adds the length-prefixed JSON metadata blob shown above.  v1 files
+       still load correctly (their nodes come back with metadata=None); new
+       saves always write v2.
+
 Why this design?
   - Fixed-length header allows O(1) metadata reads without parsing the body.
   - Length-prefixed strings (vid_len) support arbitrary UTF-8 ids.
   - Vectors stored as raw float32 bytes — zero copy on load via frombuffer.
   - Neighbour lists stored per layer so multi-layer structure is preserved.
+  - Metadata stored as UTF-8 JSON (not pickle) — safe to load from untrusted
+    files and human-inspectable, at the cost of a small serialisation step.
   - Deleted set appended last so saves stay append-friendly in future.
 """
 
 from __future__ import annotations
 
+import json
 import struct
 from pathlib import Path
 
@@ -55,7 +66,8 @@ from vectorforge.hnsw import HNSWIndex, _Node
 # Format constants
 
 MAGIC = b"VFIDX\x00\x01\x00"   # 8 bytes
-VERSION = 1
+VERSION = 2                    # current write version
+SUPPORTED_VERSIONS = frozenset({1, 2})
 
 # Header layout (little-endian)
 _HEADER_FMT = "<8sHIIIIQQ"       # magic, version, dim, M, ef, max_layer, num_nodes, num_del
@@ -115,6 +127,14 @@ def save(index: HNSWIndex, path: str | Path) -> None:
             fh.write(vid_bytes)
             fh.write(node.vector.astype("<f4").tobytes())
 
+            # Metadata (v2): length-prefixed compact JSON; 0-length means None.
+            if node.metadata:
+                meta_bytes = json.dumps(node.metadata, separators=(",", ":")).encode("utf-8")
+            else:
+                meta_bytes = b""
+            fh.write(struct.pack("<I", len(meta_bytes)))
+            fh.write(meta_bytes)
+
             for layer in range(node.level + 1):
                 nb_ids = list(node.neighbors.get(layer, set()))
                 fh.write(struct.pack("<I", len(nb_ids)))
@@ -170,11 +190,19 @@ def load(path: str | Path) -> HNSWIndex:
             vector_id = fh.read(vid_len).decode("utf-8")
             vector = np.frombuffer(fh.read(dim * 4), dtype="<f4").copy()
 
+            # Metadata (v2+): absent in v1 files, which load as metadata=None.
+            metadata: dict | None = None
+            if version >= 2:
+                (meta_len,) = struct.unpack("<I", fh.read(4))
+                if meta_len:
+                    metadata = json.loads(fh.read(meta_len).decode("utf-8"))
+
             node = _Node(
                 internal_id=internal_id,
                 vector_id=vector_id,
                 vector=vector,
                 level=level,
+                metadata=metadata,
             )
 
             for layer in range(level + 1):
@@ -210,7 +238,8 @@ def _validate_header(magic: bytes, version: int) -> None:
             f"Unrecognised file magic {magic!r}; expected {MAGIC!r}. "
             "Is this a VectorForge index file?"
         )
-    if version != VERSION:
+    if version not in SUPPORTED_VERSIONS:
         raise ValueError(
-            f"Unsupported index version {version}; this build supports version {VERSION}."
+            f"Unsupported index version {version}; this build supports versions "
+            f"{sorted(SUPPORTED_VERSIONS)}."
         )
