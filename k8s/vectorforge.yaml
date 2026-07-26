@@ -1,0 +1,97 @@
+# VectorForge API — Deployment + Service (Phase 4, Day 22–23).
+#
+# A single shard instance behind a ClusterIP service. Phase 5 scales this out
+# to several shards plus a coordinator; for now it is one replica so the
+# in-memory index stays consistent (there is no shared storage yet, so two
+# replicas would each hold a different, divergent index).
+#
+# Apply to a local kind cluster:
+#   kind create cluster --name vectorforge
+#   kind load docker-image vectorforge:latest --name vectorforge
+#   kubectl apply -f k8s/vectorforge.yaml
+#   kubectl port-forward svc/vectorforge 8000:8000
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vectorforge
+  labels:
+    app: vectorforge
+    component: shard
+spec:
+  # One replica on purpose: the index lives in process memory, so replicas
+  # would not share data until sharding + persistence-backed storage land.
+  replicas: 1
+  selector:
+    matchLabels:
+      app: vectorforge
+  template:
+    metadata:
+      labels:
+        app: vectorforge
+        component: shard
+    spec:
+      # Match the non-root user baked into the image (uid 1000).
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      containers:
+        - name: vectorforge
+          image: vectorforge:latest
+          # kind loads a local image; never pull over the network for it.
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8000
+          env:
+            - name: VECTORFORGE_DIM
+              value: "128"
+            - name: VECTORFORGE_M
+              value: "16"
+            - name: VECTORFORGE_EF_CONSTRUCTION
+              value: "200"
+          # Numba JIT and NumPy want a little headroom; cap it so a runaway
+          # index build cannot starve the node.
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "256Mi"
+            limits:
+              cpu: "1"
+              memory: "1Gi"
+          # Readiness gates traffic until the app answers; liveness restarts a
+          # wedged process. Both hit the same cheap /health handler.
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vectorforge
+  labels:
+    app: vectorforge
+spec:
+  type: ClusterIP
+  selector:
+    app: vectorforge
+  ports:
+    - name: http
+      port: 8000
+      targetPort: http
