@@ -1,0 +1,80 @@
+// VectorForge gRPC schema — the low-latency internal interface used for
+// inter-shard communication (coordinator ↔ shard), mirroring the public REST
+// surface in vectorforge/api.py.
+//
+// Why gRPC alongside REST: shard fan-out is a hot, high-frequency internal
+// path where HTTP/1.1 + JSON overhead matters. Protobuf gives a compact binary
+// wire format, HTTP/2 multiplexing, and a generated typed client, which is the
+// realistic choice for service-to-service calls.
+//
+// Regenerate stubs (Phase 3, Day 18–19):
+//   python -m grpc_tools.protoc -I protos \
+//     --python_out=src --grpc_python_out=src protos/vectorforge.proto
+
+syntax = "proto3";
+
+package vectorforge.v1;
+
+// Struct carries arbitrary JSON-like metadata / filter objects without pinning
+// them to a fixed schema, matching the REST layer's free-form `metadata` dict.
+import "google/protobuf/struct.proto";
+
+// The shard-facing service. Each shard is an independent VectorForge index;
+// the coordinator is just another client of this interface.
+service VectorForge {
+  // Insert one vector (with optional metadata) into the index.
+  rpc Index(IndexRequest) returns (IndexResponse);
+
+  // Approximate k-NN search with an optional metadata equality filter.
+  rpc Search(SearchRequest) returns (SearchResponse);
+
+  // Tombstone a vector by id (mark-and-skip, not a graph rebuild).
+  rpc Delete(DeleteRequest) returns (DeleteResponse);
+
+  // Liveness + basic index stats.
+  rpc Health(HealthRequest) returns (HealthResponse);
+}
+
+message IndexRequest {
+  string id = 1;                       // caller-supplied vector id
+  repeated float vector = 2;           // length must equal the index dim
+  google.protobuf.Struct metadata = 3; // optional; absent == no metadata
+}
+
+message IndexResponse {
+  string id = 1;
+  string status = 2;                   // e.g. "indexed"
+}
+
+message SearchRequest {
+  repeated float vector = 1;           // query embedding, length == dim
+  uint32 k = 2;                        // number of neighbours to return
+  optional uint32 ef = 3;              // search beam width; unset == default
+  google.protobuf.Struct filter = 4;   // optional equality filter over metadata
+}
+
+message Neighbor {
+  string id = 1;
+  float distance = 2;
+}
+
+message SearchResponse {
+  repeated Neighbor results = 1;       // ascending by distance
+}
+
+message DeleteRequest {
+  string id = 1;
+}
+
+message DeleteResponse {
+  string id = 1;
+  bool deleted = 2;                    // false if the id was not present
+}
+
+message HealthRequest {}
+
+message HealthResponse {
+  string status = 1;                   // "ok"
+  uint64 size = 2;                     // live (non-tombstoned) vector count
+  uint32 dim = 3;                      // index dimensionality
+}
