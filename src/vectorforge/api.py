@@ -34,10 +34,12 @@ import os
 from collections.abc import Callable
 
 import numpy as np
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Response
+from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from pydantic import BaseModel, Field
 
 from vectorforge.hnsw import HNSWIndex
+from vectorforge.metrics import Metrics
 
 # ---------------------------------------------------------------------------
 # Request / response schemas
@@ -112,6 +114,8 @@ def create_app(index: HNSWIndex) -> FastAPI:
         version="0.1.0",
     )
     app.state.index = index
+    metrics = Metrics()
+    app.state.metrics = metrics
 
     def _as_vector(values: list[float]) -> np.ndarray:
         return np.asarray(values, dtype=np.float32)
@@ -129,12 +133,15 @@ def create_app(index: HNSWIndex) -> FastAPI:
     @app.post("/search", response_model=SearchResponse)
     def search(req: SearchRequest) -> SearchResponse:
         try:
-            hits = index.search(
-                _as_vector(req.vector),
-                k=req.k,
-                ef=req.ef,
-                predicate=_compile_filter(req.filter),
-            )
+            # Time only the core search so the latency metric reflects the
+            # index, not request parsing or JSON serialization.
+            with metrics.query_latency.time():
+                hits = index.search(
+                    _as_vector(req.vector),
+                    k=req.k,
+                    ef=req.ef,
+                    predicate=_compile_filter(req.filter),
+                )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return SearchResponse(results=[Neighbor(id=vid, distance=dist) for vid, dist in hits])
@@ -148,6 +155,13 @@ def create_app(index: HNSWIndex) -> FastAPI:
     @app.get("/health", response_model=HealthResponse)
     def health() -> HealthResponse:
         return HealthResponse(status="ok", size=len(index), dim=index.dim)
+
+    @app.get("/metrics")
+    def prometheus_metrics() -> Response:
+        # Refresh the size gauge at scrape time so it is always current without
+        # having to touch it on every insert and delete.
+        metrics.set_index_size(len(index))
+        return Response(generate_latest(metrics.registry), media_type=CONTENT_TYPE_LATEST)
 
     return app
 
