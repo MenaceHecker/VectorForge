@@ -23,6 +23,10 @@ htmlcov/
 *.vfidx
 data/
 
+# Generated gRPC stubs (regenerate with protoc; see README)
+*_pb2.py
+*_pb2_grpc.py
+
 # Editors / OS
 .vscode/
 .idea/

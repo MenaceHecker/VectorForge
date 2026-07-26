@@ -100,6 +100,22 @@ python -m grpc_tools.protoc -I protos \
   protos/vectorforge.proto
 ```
 
+The grpc plugin emits a top-level `import vectorforge_pb2`, which does not
+resolve once the stub sits inside the `vectorforge` package. Rewrite it to be
+package-relative (portable across sed versions):
+
+```bash
+python - <<'PY'
+import pathlib
+p = pathlib.Path("src/vectorforge/vectorforge_pb2_grpc.py")
+p.write_text(p.read_text().replace(
+    "\nimport vectorforge_pb2 as", "\nfrom vectorforge import vectorforge_pb2 as"))
+PY
+```
+
+The gRPC tests skip themselves until these stubs exist, so `pytest` stays green
+on a fresh checkout.
+
 ## Roadmap
 
 - [x] Phase 1: Core index and brute-force baseline
