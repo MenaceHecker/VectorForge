@@ -30,6 +30,11 @@ spec:
       labels:
         app: vectorforge
         component: shard
+      annotations:
+        # Let Prometheus find and scrape this pod's /metrics endpoint.
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+        prometheus.io/path: "/metrics"
     spec:
       # Match the non-root user baked into the image (uid 1000).
       securityContext:
