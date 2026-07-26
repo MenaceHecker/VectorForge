@@ -36,6 +36,8 @@ where = ["src"]
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+# Generated protobuf/gRPC stubs are machine-authored; do not lint them.
+extend-exclude = ["*_pb2.py", "*_pb2_grpc.py"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "N"]
