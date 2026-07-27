@@ -30,7 +30,10 @@ builds one from ``VECTORFORGE_DIM`` / ``VECTORFORGE_M`` /
 
 from __future__ import annotations
 
+import logging
 import os
+import threading
+import time
 from collections.abc import Callable
 
 import numpy as np
@@ -38,8 +41,11 @@ from fastapi import FastAPI, HTTPException, Response
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from pydantic import BaseModel, Field
 
+from vectorforge.benchmark import RecallBenchmark
 from vectorforge.hnsw import HNSWIndex
 from vectorforge.metrics import Metrics
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Request / response schemas
@@ -163,7 +169,35 @@ def create_app(index: HNSWIndex) -> FastAPI:
         metrics.set_index_size(len(index))
         return Response(generate_latest(metrics.registry), media_type=CONTENT_TYPE_LATEST)
 
+    # Optional in-process recall job. It stays off unless an interval is set,
+    # so tests and normal runs are unaffected; set VECTORFORGE_BENCHMARK_INTERVAL
+    # (seconds) to have it periodically refresh the recall_at_k gauge.
+    app.state.benchmark = RecallBenchmark(index, metrics)
+    interval = float(os.environ.get("VECTORFORGE_BENCHMARK_INTERVAL", "0"))
+    if interval > 0:
+        _start_recall_loop(app.state.benchmark, interval)
+
     return app
+
+
+def _start_recall_loop(benchmark: RecallBenchmark, interval: float) -> None:
+    """Run the recall benchmark on a daemon thread every *interval* seconds.
+
+    A daemon thread keeps this from holding the process open on shutdown. A
+    failed run is logged and swallowed so a transient error never kills the
+    loop or the service.
+    """
+
+    def loop() -> None:
+        while True:
+            time.sleep(interval)
+            try:
+                recall = benchmark.run_once()
+                logger.info("recall benchmark: recall@%d = %.4f", benchmark.k, recall)
+            except Exception:
+                logger.exception("recall benchmark run failed")
+
+    threading.Thread(target=loop, daemon=True, name="recall-benchmark").start()
 
 
 def _index_from_env() -> HNSWIndex:
