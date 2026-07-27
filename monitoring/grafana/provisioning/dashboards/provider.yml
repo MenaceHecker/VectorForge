@@ -1,0 +1,15 @@
+# Loads every dashboard JSON under the dashboards folder on startup, so the
+# two VectorForge dashboards show up without anyone importing them by hand.
+apiVersion: 1
+
+providers:
+  - name: vectorforge
+    orgId: 1
+    folder: VectorForge
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /etc/grafana/dashboards
+      foldersFromFilesStructure: false

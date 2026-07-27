@@ -1,0 +1,181 @@
+{
+  "uid": "vf-system-health",
+  "title": "VectorForge System Health",
+  "description": "Live health of a VectorForge shard: how big the index is, how fast queries return, and how much load it is taking.",
+  "tags": ["vectorforge"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "10s",
+  "time": { "from": "now-30m", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Live vectors",
+      "description": "Non-tombstoned vectors currently in the index.",
+      "gridPos": { "h": 5, "w": 6, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "vectorforge-prom" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "vectorforge_index_size_total",
+          "datasource": { "type": "prometheus", "uid": "vectorforge-prom" }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": { "mode": "fixed", "fixedColor": "blue" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Recall@k",
+      "description": "Most recent recall against brute-force ground truth. Green once it clears the 95% target, amber below it, red if it slips under 90%.",
+      "gridPos": { "h": 5, "w": 6, "x": 6, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "vectorforge-prom" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "vectorforge_recall_at_k",
+          "datasource": { "type": "prometheus", "uid": "vectorforge-prom" }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "yellow", "value": 0.9 },
+              { "color": "green", "value": 0.95 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Query rate",
+      "description": "Searches per second, averaged over the last 5 minutes.",
+      "gridPos": { "h": 5, "w": 6, "x": 12, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "vectorforge-prom" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(vectorforge_query_latency_seconds_count[5m]))",
+          "datasource": { "type": "prometheus", "uid": "vectorforge-prom" }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "color": { "mode": "fixed", "fixedColor": "purple" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "p95 latency",
+      "description": "95th percentile search latency. Green under the 15ms target.",
+      "gridPos": { "h": 5, "w": 6, "x": 18, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "vectorforge-prom" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum(rate(vectorforge_query_latency_seconds_bucket[5m])) by (le))",
+          "datasource": { "type": "prometheus", "uid": "vectorforge-prom" }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 0.015 },
+              { "color": "red", "value": 0.05 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Query latency percentiles",
+      "description": "p50, p95, and p99 search latency from the query_latency_seconds histogram. All three share one axis (seconds), so they stay directly comparable.",
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 5 },
+      "datasource": { "type": "prometheus", "uid": "vectorforge-prom" },
+      "targets": [
+        {
+          "refId": "A",
+          "legendFormat": "p50",
+          "expr": "histogram_quantile(0.50, sum(rate(vectorforge_query_latency_seconds_bucket[5m])) by (le))",
+          "datasource": { "type": "prometheus", "uid": "vectorforge-prom" }
+        },
+        {
+          "refId": "B",
+          "legendFormat": "p95",
+          "expr": "histogram_quantile(0.95, sum(rate(vectorforge_query_latency_seconds_bucket[5m])) by (le))",
+          "datasource": { "type": "prometheus", "uid": "vectorforge-prom" }
+        },
+        {
+          "refId": "C",
+          "legendFormat": "p99",
+          "expr": "histogram_quantile(0.99, sum(rate(vectorforge_query_latency_seconds_bucket[5m])) by (le))",
+          "datasource": { "type": "prometheus", "uid": "vectorforge-prom" }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 5,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "none" }
+      }
+    }
+  ]
+}

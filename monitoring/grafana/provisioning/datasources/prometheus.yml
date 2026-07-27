@@ -1,0 +1,12 @@
+# Points Grafana at the in-cluster Prometheus. The uid is fixed so the
+# dashboard JSON can reference it without hand-editing after import.
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    uid: vectorforge-prom
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false
