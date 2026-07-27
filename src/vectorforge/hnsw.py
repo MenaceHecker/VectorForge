@@ -42,7 +42,7 @@ from __future__ import annotations
 
 import heapq
 import math
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -333,6 +333,16 @@ class HNSWIndex:
             raise KeyError(vector_id)
         meta = self._nodes[iid].metadata
         return dict(meta) if meta is not None else None
+
+    def live_items(self) -> Iterator[tuple[str, NDArray[np.float32]]]:
+        """Yield ``(vector_id, vector)`` for every non-tombstoned vector.
+
+        Gives callers (the benchmark job, a re-index pass) a clean way to walk
+        the live corpus without reaching into the graph internals.
+        """
+        for iid, node in self._nodes.items():
+            if iid not in self._deleted:
+                yield node.vector_id, node.vector
 
     @property
     def max_layer(self) -> int:
