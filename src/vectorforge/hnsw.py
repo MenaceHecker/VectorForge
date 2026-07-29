@@ -42,11 +42,71 @@ from __future__ import annotations
 
 import heapq
 import math
+import threading
 from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 
 import numpy as np
 from numpy.typing import NDArray
+
+
+class _RWLock:
+    """A readers-writer lock: many concurrent readers, one exclusive writer.
+
+    The index is served from a thread pool (FastAPI runs sync handlers on
+    worker threads), so searches and inserts can land at the same time. Without
+    this, a search iterating a neighbour set while an insert mutates it crashes
+    with "set changed size during iteration".
+
+    Search is the hot path and is read-only, so readers run concurrently; an
+    insert or delete takes the lock exclusively and waits for in-flight reads to
+    drain.
+
+    This is *writer-preferred*: while a writer is waiting, new readers queue
+    behind it instead of jumping ahead. Under a steady stream of searches a
+    naive readers-preferred lock would let the reader count never reach zero and
+    starve writers indefinitely (a real deadlock, not just slowness), so writers
+    getting priority is what keeps inserts making progress.
+    """
+
+    def __init__(self) -> None:
+        self._cond = threading.Condition()
+        self._readers = 0
+        self._writer = False
+        self._writers_waiting = 0
+
+    @contextmanager
+    def reader(self) -> Iterator[None]:
+        with self._cond:
+            # Yield to any writer that is active or already queued.
+            while self._writer or self._writers_waiting > 0:
+                self._cond.wait()
+            self._readers += 1
+        try:
+            yield
+        finally:
+            with self._cond:
+                self._readers -= 1
+                if self._readers == 0:
+                    self._cond.notify_all()
+
+    @contextmanager
+    def writer(self) -> Iterator[None]:
+        with self._cond:
+            self._writers_waiting += 1
+            try:
+                while self._writer or self._readers > 0:
+                    self._cond.wait()
+            finally:
+                self._writers_waiting -= 1
+            self._writer = True
+        try:
+            yield
+        finally:
+            with self._cond:
+                self._writer = False
+                self._cond.notify_all()
 
 # ---------------------------------------------------------------------------
 # Internal node representation
@@ -140,6 +200,7 @@ class HNSWIndex:
         self._max_layer: int = 0
         self._next_id: int = 0
         self._rng = np.random.default_rng()
+        self._lock = _RWLock()  # guards concurrent search vs insert/delete
 
     # ------------------------------------------------------------------
     # Public API
@@ -179,63 +240,69 @@ class HNSWIndex:
             raise ValueError(
                 f"Expected vector of shape ({self.dim},), got {vector.shape}"
             )
-        if vector_id in self._id_map:
-            raise ValueError(f"vector_id {vector_id!r} already exists in the index")
+        # Hold the write lock for the whole insert: it reads and mutates the
+        # graph (entry point, neighbour sets, counters) and must not interleave
+        # with a concurrent search or another insert.
+        with self._lock.writer():
+            if vector_id in self._id_map:
+                raise ValueError(f"vector_id {vector_id!r} already exists in the index")
 
-        # Step 1 — assign level via exponential distribution (paper eq. 1)
-        level = int(math.floor(-math.log(self._rng.uniform()) * self.mL))
+            # Step 1 — assign level via exponential distribution (paper eq. 1)
+            level = int(math.floor(-math.log(self._rng.uniform()) * self.mL))
 
-        iid = self._next_id
-        self._next_id += 1
-        node = _Node(
-            internal_id=iid,
-            vector_id=vector_id,
-            vector=vector.copy(),
-            level=level,
-            metadata=dict(metadata) if metadata is not None else None,
-        )
-        self._nodes[iid] = node
-        self._id_map[vector_id] = iid
+            iid = self._next_id
+            self._next_id += 1
+            node = _Node(
+                internal_id=iid,
+                vector_id=vector_id,
+                vector=vector.copy(),
+                level=level,
+                metadata=dict(metadata) if metadata is not None else None,
+            )
+            self._nodes[iid] = node
+            self._id_map[vector_id] = iid
 
-        if self._entry_point is None:
-            self._entry_point = iid
-            self._max_layer = level
-            return
+            if self._entry_point is None:
+                self._entry_point = iid
+                self._max_layer = level
+                return
 
-        ep = self._entry_point
-        top = self._max_layer
+            ep = self._entry_point
+            top = self._max_layer
 
-        # Step 2 — coarse descent from top layer down to level+1 (ef=1)
-        for layer in range(top, level, -1):
-            candidates = self._search_layer(vector, ep, ef=1, layer=layer)
-            ep = min(candidates, key=lambda x: x[1])[0]
-
-        # Step 3 — fine insert from min(level, top) down to layer 0
-        for layer in range(min(level, top), -1, -1):
-            m_cap = self.M0 if layer == 0 else self.M
-            candidates = self._search_layer(vector, ep, ef=self.ef_construction, layer=layer)
-
-            neighbours = self._select_neighbours(candidates, m=m_cap)
-            for nb_iid, _ in neighbours:
-                node.neighbors[layer].add(nb_iid)
-                self._nodes[nb_iid].neighbors[layer].add(iid)
-
-            # Prune neighbours that exceed their connection cap
-            for nb_iid, _ in neighbours:
-                nb_node = self._nodes[nb_iid]
-                if len(nb_node.neighbors[layer]) > m_cap:
-                    nb_node.neighbors[layer] = self._prune_neighbors(
-                        nb_node, layer=layer, m=m_cap
-                    )
-
-            # Update entry point for next (lower) layer
-            if candidates:
+            # Step 2 — coarse descent from top layer down to level+1 (ef=1)
+            for layer in range(top, level, -1):
+                candidates = self._search_layer(vector, ep, ef=1, layer=layer)
                 ep = min(candidates, key=lambda x: x[1])[0]
 
-        # Step 4 — promote entry point if new node reaches a higher layer
-        if level > self._max_layer:
-            self._entry_point = iid
-            self._max_layer = level
+            # Step 3 — fine insert from min(level, top) down to layer 0
+            for layer in range(min(level, top), -1, -1):
+                m_cap = self.M0 if layer == 0 else self.M
+                candidates = self._search_layer(
+                    vector, ep, ef=self.ef_construction, layer=layer
+                )
+
+                neighbours = self._select_neighbours(candidates, m=m_cap)
+                for nb_iid, _ in neighbours:
+                    node.neighbors[layer].add(nb_iid)
+                    self._nodes[nb_iid].neighbors[layer].add(iid)
+
+                # Prune neighbours that exceed their connection cap
+                for nb_iid, _ in neighbours:
+                    nb_node = self._nodes[nb_iid]
+                    if len(nb_node.neighbors[layer]) > m_cap:
+                        nb_node.neighbors[layer] = self._prune_neighbors(
+                            nb_node, layer=layer, m=m_cap
+                        )
+
+                # Update entry point for next (lower) layer
+                if candidates:
+                    ep = min(candidates, key=lambda x: x[1])[0]
+
+            # Step 4 — promote entry point if new node reaches a higher layer
+            if level > self._max_layer:
+                self._entry_point = iid
+                self._max_layer = level
 
     def search(
         self,
@@ -278,27 +345,32 @@ class HNSWIndex:
             raise ValueError(
                 f"Expected query of shape ({self.dim},), got {query.shape}"
             )
-        if self._entry_point is None:
-            return []
-
         ef = ef or max(k, self.ef_construction)
-        ep = self._entry_point
 
-        # Coarse descent through layers above 0 — unfiltered navigation.
-        for layer in range(self._max_layer, 0, -1):
-            candidates = self._search_layer(query, ep, ef=1, layer=layer)
-            ep = min(candidates, key=lambda x: x[1])[0]
+        # Read lock: the whole traversal must see a stable graph, so concurrent
+        # inserts wait until it finishes rather than mutating mid-walk.
+        with self._lock.reader():
+            if self._entry_point is None:
+                return []
+            ep = self._entry_point
 
-        # Full beam search at layer 0, applying the metadata predicate.
-        candidates = self._search_layer(query, ep, ef=ef, layer=0, predicate=predicate)
-        candidates.sort(key=lambda x: x[1])
+            # Coarse descent through layers above 0 — unfiltered navigation.
+            for layer in range(self._max_layer, 0, -1):
+                candidates = self._search_layer(query, ep, ef=1, layer=layer)
+                ep = min(candidates, key=lambda x: x[1])[0]
 
-        # Filter *before* truncating so ineligible nodes never consume a
-        # top-k slot that an eligible-but-slightly-farther node deserves.
-        eligible = [
-            (iid, dist) for iid, dist in candidates if self._is_eligible(iid, predicate)
-        ]
-        return [(self._nodes[iid].vector_id, dist) for iid, dist in eligible[:k]]
+            # Full beam search at layer 0, applying the metadata predicate.
+            candidates = self._search_layer(query, ep, ef=ef, layer=0, predicate=predicate)
+            candidates.sort(key=lambda x: x[1])
+
+            # Filter *before* truncating so ineligible nodes never consume a
+            # top-k slot that an eligible-but-slightly-farther node deserves.
+            eligible = [
+                (iid, dist)
+                for iid, dist in candidates
+                if self._is_eligible(iid, predicate)
+            ]
+            return [(self._nodes[iid].vector_id, dist) for iid, dist in eligible[:k]]
 
     def delete(self, vector_id: str) -> bool:
         """Tombstone *vector_id* so it is excluded from future results.
@@ -312,11 +384,12 @@ class HNSWIndex:
 
         Returns ``True`` if the id existed, ``False`` otherwise.
         """
-        iid = self._id_map.get(vector_id)
-        if iid is None:
-            return False
-        self._deleted.add(iid)
-        return True
+        with self._lock.writer():
+            iid = self._id_map.get(vector_id)
+            if iid is None:
+                return False
+            self._deleted.add(iid)
+            return True
 
     def get_metadata(self, vector_id: str) -> dict | None:
         """Return a copy of the metadata stored for *vector_id*.
@@ -328,21 +401,27 @@ class HNSWIndex:
         KeyError
             If *vector_id* is not present in the index.
         """
-        iid = self._id_map.get(vector_id)
-        if iid is None:
-            raise KeyError(vector_id)
-        meta = self._nodes[iid].metadata
-        return dict(meta) if meta is not None else None
+        with self._lock.reader():
+            iid = self._id_map.get(vector_id)
+            if iid is None:
+                raise KeyError(vector_id)
+            meta = self._nodes[iid].metadata
+            return dict(meta) if meta is not None else None
 
-    def live_items(self) -> Iterator[tuple[str, NDArray[np.float32]]]:
-        """Yield ``(vector_id, vector)`` for every non-tombstoned vector.
+    def live_items(self) -> list[tuple[str, NDArray[np.float32]]]:
+        """Return ``(vector_id, vector)`` for every non-tombstoned vector.
 
         Gives callers (the benchmark job, a re-index pass) a clean way to walk
-        the live corpus without reaching into the graph internals.
+        the live corpus without reaching into the graph internals. A snapshot is
+        taken under the read lock so a concurrent insert cannot resize the node
+        map mid-iteration; the vectors themselves are shared by reference.
         """
-        for iid, node in self._nodes.items():
-            if iid not in self._deleted:
-                yield node.vector_id, node.vector
+        with self._lock.reader():
+            return [
+                (node.vector_id, node.vector)
+                for iid, node in self._nodes.items()
+                if iid not in self._deleted
+            ]
 
     @property
     def max_layer(self) -> int:

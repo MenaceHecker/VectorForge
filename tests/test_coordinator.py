@@ -160,8 +160,10 @@ def test_metadata_filter_fans_out() -> None:
 # ---------------------------------------------------------------------------
 # End-to-end over real gRPC (skipped until stubs exist)
 # ---------------------------------------------------------------------------
-
-pytest.importorskip("vectorforge.vectorforge_pb2", reason="run protoc to generate stubs")
+#
+# The skip guard lives inside the fixture, not at module level: a module-level
+# importorskip would skip this whole file when the stubs are absent (as in CI
+# before codegen), taking the local-shard tests above down with it.
 
 
 def _free_port() -> int:
@@ -172,6 +174,7 @@ def _free_port() -> int:
 
 @pytest.fixture()
 def grpc_cluster() -> Iterator[Coordinator]:
+    pytest.importorskip("vectorforge.vectorforge_pb2", reason="run protoc to generate stubs")
     from vectorforge.coordinator import GrpcShardClient
     from vectorforge.grpc_server import serve
 
