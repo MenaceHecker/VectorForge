@@ -12,15 +12,17 @@ a Hierarchical Navigable Small World graph, and there is a brute-force index
 sitting next to it so I can measure exactly how much recall the approximate
 search trades away for speed.
 
-**Status:** Phases 1 and 2 are done. Phase 3 (the API layer) is in progress.
-The REST service and the gRPC servicer are written; sharding and observability
-come later.
+**Status:** Phases 1 through 5 are done. The engine runs single-node or as a
+sharded cluster, with a REST and gRPC surface, Prometheus metrics, and Grafana
+dashboards. Phase 6 (benchmarks and polish) is in progress; I am still holding
+back real benchmark numbers until I can stand behind every one of them.
 
 ## What is in here
 
 - **Core HNSW index.** Multi-layer graph following the Malkov and Yashunin
   paper, with insert, approximate search, and delete by tombstoning. Built on
-  NumPy, with Numba planned for the distance hot path.
+  NumPy, with Numba planned for the distance hot path. A reader-writer lock
+  makes concurrent search and insert safe under the server's thread pool.
 - **Brute-force baseline.** An exact k-NN index that serves as ground truth for
   every recall number, so the benchmarks are honest.
 - **Persistence.** A custom binary format (no pickle) that saves and reloads
@@ -30,11 +32,56 @@ come later.
   search takes a predicate that filters results without wrecking recall. The
   filter runs during graph traversal, so non-matching nodes are still walked
   through for connectivity, they just never come back in the results.
-- **REST API.** A FastAPI service exposing `/index`, `/search`,
-  `/vectors/{id}`, and `/health`, with proper status codes for duplicate ids,
-  bad dimensions, and unknown vectors.
-- **gRPC layer.** A proto schema and a servicer that wraps the same core index,
-  meant for the low-latency calls between shards that come in Phase 5.
+- **REST and gRPC APIs.** A FastAPI service exposing `/index`, `/search`,
+  `/vectors/{id}`, and `/health`, plus a gRPC servicer wrapping the same core
+  index for the low-latency calls between shards.
+- **Distributed layer.** A consistent hash ring (written from scratch, with
+  virtual nodes) routes each vector to a shard, and a coordinator fans searches
+  out to every shard in parallel and merges the top-k by distance.
+- **Observability.** Prometheus metrics for query-latency percentiles, index
+  size, and recall, a periodic brute-force benchmark that feeds the recall
+  gauge, and two Grafana dashboards including the recall-versus-latency view.
+
+## Architecture
+
+A client talks only to the coordinator. Writes are routed to a single shard by
+hashing the vector id; searches have no id to hash, so they fan out to every
+shard and the coordinator merges the results. Each shard is an independent
+VectorForge instance with its own HNSW index and on-disk snapshot.
+
+```mermaid
+flowchart TB
+    client(["Client"])
+
+    subgraph coord["Coordinator"]
+        rest["REST API<br/>/index /search /delete"]
+        ring["Consistent hash ring<br/>virtual nodes"]
+        rest --> ring
+    end
+
+    subgraph shardset["Shards, each an independent VectorForge instance"]
+        s0["Shard 0<br/>HNSW index + snapshot"]
+        s1["Shard 1<br/>HNSW index + snapshot"]
+        s2["Shard 2<br/>HNSW index + snapshot"]
+    end
+
+    subgraph obs["Observability"]
+        prom["Prometheus"]
+        graf["Grafana<br/>recall vs latency"]
+        prom --> graf
+    end
+
+    client -->|HTTP JSON| rest
+    ring -->|"write: route id to one shard (gRPC)"| s1
+    rest ==>|"search: fan out to all shards (gRPC), merge top-k"| s0
+    rest ==> s1
+    rest ==> s2
+
+    s0 -.->|/metrics| prom
+    s1 -.-> prom
+    s2 -.-> prom
+    rest -.-> prom
+```
 
 ## Stack
 
@@ -120,11 +167,11 @@ on a fresh checkout.
 
 - [x] Phase 1: Core index and brute-force baseline
 - [x] Phase 2: Multi-layer HNSW, persistence, delete, metadata filtering
-- [ ] Phase 3: FastAPI and gRPC API layer (in progress)
-- [ ] Phase 4: Kubernetes and observability
-- [ ] Phase 5: Distributed sharding with a consistent-hash coordinator
-- [ ] Phase 6: Benchmarks, polish, launch
+- [x] Phase 3: FastAPI and gRPC API layer
+- [x] Phase 4: Kubernetes and observability
+- [x] Phase 5: Distributed sharding with a consistent-hash coordinator
+- [ ] Phase 6: Benchmarks, polish, launch (in progress)
 
-The architecture diagram and the recall-versus-latency chart go here once
-Phase 6 benchmarks are in. I am not putting numbers on this page until I can
-back every one of them.
+The recall-versus-latency chart and a benchmark results table go here once the
+Phase 6 runs are done. I am not putting numbers on this page until I can back
+every one of them.
