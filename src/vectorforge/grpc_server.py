@@ -25,14 +25,18 @@ Error mapping (mirrors the REST status codes)
 
 from __future__ import annotations
 
-from collections.abc import Callable
+import logging
+import os
 from concurrent import futures
 
 import grpc
 import numpy as np
 from google.protobuf.json_format import MessageToDict
 
+from vectorforge.filtering import compile_equality_filter
 from vectorforge.hnsw import HNSWIndex
+
+logger = logging.getLogger(__name__)
 
 # Generated stubs live next to this module once protoc has run.  Fall back to a
 # top-level import so either --python_out layout (package dir vs. src root)
@@ -48,17 +52,6 @@ except ImportError:  # pragma: no cover
 def _struct_to_dict(struct) -> dict:
     """Convert a ``google.protobuf.Struct`` field to a plain Python dict."""
     return MessageToDict(struct)
-
-
-def _compile_filter(spec: dict | None) -> Callable[[dict], bool] | None:
-    """Equality predicate over metadata; keep only vectors matching all keys."""
-    if not spec:
-        return None
-
-    def predicate(meta: dict) -> bool:
-        return all(meta.get(key) == value for key, value in spec.items())
-
-    return predicate
 
 
 class VectorForgeServicer(pb_grpc.VectorForgeServicer):
@@ -85,7 +78,7 @@ class VectorForgeServicer(pb_grpc.VectorForgeServicer):
         return pb.IndexResponse(id=request.id, status="indexed")
 
     def Search(self, request, context):  # noqa: N802 - gRPC method name
-        predicate = _compile_filter(
+        predicate = compile_equality_filter(
             _struct_to_dict(request.filter) if request.HasField("filter") else None
         )
         try:
@@ -121,3 +114,26 @@ def serve(index: HNSWIndex, port: int = 50051, max_workers: int = 8) -> grpc.Ser
     server.add_insecure_port(f"[::]:{port}")
     server.start()
     return server
+
+
+def main() -> None:
+    """Run a shard as a standalone gRPC server until killed.
+
+    Reads the index geometry and port from the environment so one image can be
+    deployed many times as separate shards. This is the container entrypoint
+    for a shard pod: `python -m vectorforge.grpc_server`.
+    """
+    logging.basicConfig(level=logging.INFO)
+    index = HNSWIndex(
+        dim=int(os.environ.get("VECTORFORGE_DIM", "128")),
+        M=int(os.environ.get("VECTORFORGE_M", "16")),
+        ef_construction=int(os.environ.get("VECTORFORGE_EF_CONSTRUCTION", "200")),
+    )
+    port = int(os.environ.get("VECTORFORGE_GRPC_PORT", "50051"))
+    server = serve(index, port=port)
+    logger.info("shard gRPC server listening on :%d", port)
+    server.wait_for_termination()
+
+
+if __name__ == "__main__":
+    main()
