@@ -34,7 +34,6 @@ import logging
 import os
 import threading
 import time
-from collections.abc import Callable
 
 import numpy as np
 from fastapi import FastAPI, HTTPException, Response
@@ -42,6 +41,7 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from pydantic import BaseModel, Field
 
 from vectorforge.benchmark import RecallBenchmark
+from vectorforge.filtering import compile_equality_filter
 from vectorforge.hnsw import HNSWIndex
 from vectorforge.metrics import Metrics
 
@@ -92,21 +92,6 @@ class HealthResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-def _compile_filter(spec: dict | None) -> Callable[[dict], bool] | None:
-    """Turn a JSON equality ``spec`` into a metadata predicate.
-
-    ``{"group": 0, "lang": "en"}`` → keep vectors whose metadata has
-    ``group == 0`` **and** ``lang == "en"``.  ``None``/empty means no filter.
-    """
-    if not spec:
-        return None
-
-    def predicate(meta: dict) -> bool:
-        return all(meta.get(key) == value for key, value in spec.items())
-
-    return predicate
-
-
 # ---------------------------------------------------------------------------
 # App factory
 # ---------------------------------------------------------------------------
@@ -146,7 +131,7 @@ def create_app(index: HNSWIndex) -> FastAPI:
                     _as_vector(req.vector),
                     k=req.k,
                     ef=req.ef,
-                    predicate=_compile_filter(req.filter),
+                    predicate=compile_equality_filter(req.filter),
                 )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
