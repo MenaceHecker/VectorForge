@@ -83,6 +83,36 @@ flowchart TB
     rest -.-> prom
 ```
 
+## Benchmarks
+
+This is the core tradeoff of approximate search: a wider search beam (higher
+`ef`) recovers more of the true nearest neighbours but costs more time per query.
+The numbers below are a local single-node run on 10,000 synthetic 128-dimensional
+vectors, measured against a brute-force ground truth. Uniform random vectors have
+no cluster structure, which makes them a deliberately hard case for recall; real
+embeddings usually do better at the same `ef`.
+
+![Recall@10 versus p95 query latency across an ef sweep](docs/recall-vs-latency.svg)
+
+| ef  | recall@10 | p50 (ms) | p95 (ms) | p99 (ms) |
+| --- | --------- | -------- | -------- | -------- |
+| 10  | 0.352 | 0.60 | 0.84 | 1.09 |
+| 20  | 0.492 | 0.97 | 1.41 | 1.64 |
+| 40  | 0.656 | 1.55 | 1.85 | 1.95 |
+| 80  | 0.822 | 2.60 | 2.85 | 3.02 |
+| 160 | 0.923 | 4.28 | 4.70 | 4.82 |
+| 320 | 0.970 | 6.86 | 7.78 | 8.17 |
+
+Reproduce it with:
+
+```bash
+python scripts/run_benchmark.py --n 10000 --dim 128 --q 200
+```
+
+The resume-grade numbers (real embeddings, sharded across three nodes) are still
+pending. I am keeping this table labelled as exactly what it is: a single-node
+run on synthetic data on one laptop.
+
 ## Stack
 
 Python 3.11, NumPy and Numba, FastAPI, gRPC, Kubernetes, Prometheus, Terraform.
@@ -172,6 +202,7 @@ on a fresh checkout.
 - [x] Phase 5: Distributed sharding with a consistent-hash coordinator
 - [ ] Phase 6: Benchmarks, polish, launch (in progress)
 
-The recall-versus-latency chart and a benchmark results table go here once the
-Phase 6 runs are done. I am not putting numbers on this page until I can back
-every one of them.
+The single-node recall-versus-latency benchmark is in the Benchmarks section
+above. The remaining Phase 6 work is running it on real embeddings across the
+sharded cluster, then writing the resume bullet against those numbers. I am not
+putting a number on this page until I can back it.
