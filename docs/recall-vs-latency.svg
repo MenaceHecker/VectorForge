@@ -1,0 +1,74 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 420" role="img" aria-labelledby="title desc" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif">
+  <title id="title">Recall@10 versus p95 query latency</title>
+  <desc id="desc">As the search beam width ef grows from 10 to 320, recall at 10 rises from 0.35 to 0.97 while p95 latency rises from 0.8 to 7.8 milliseconds, on 10,000 synthetic 128-dimensional vectors on a single node.</desc>
+  <style>
+    :root {
+      --ink: #1f2328;
+      --muted: #59636e;
+      --grid: #d1d9e0;
+      --accent: #2563eb;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --ink: #e6edf3;
+        --muted: #9198a1;
+        --grid: #3d444d;
+        --accent: #4c8dff;
+      }
+    }
+    .ink { fill: var(--ink); }
+    .muted { fill: var(--muted); }
+    .grid { stroke: var(--grid); stroke-width: 1; }
+    .axis { stroke: var(--muted); stroke-width: 1; }
+    .curve { stroke: var(--accent); stroke-width: 2; fill: none; }
+    .pt { fill: var(--accent); }
+    text { font-size: 12px; }
+  </style>
+
+  <text x="64" y="24" class="ink" font-size="14" font-weight="600">Recall@10 vs p95 latency (10,000 vectors, dim 128, single node)</text>
+
+  <!-- horizontal gridlines at recall 0, 0.25, 0.5, 0.75, 1.0 -->
+  <line class="grid" x1="64" y1="48" x2="696" y2="48"/>
+  <line class="grid" x1="64" y1="127" x2="696" y2="127"/>
+  <line class="grid" x1="64" y1="206" x2="696" y2="206"/>
+  <line class="grid" x1="64" y1="285" x2="696" y2="285"/>
+
+  <!-- axes -->
+  <line class="axis" x1="64" y1="48" x2="64" y2="364"/>
+  <line class="axis" x1="64" y1="364" x2="696" y2="364"/>
+
+  <!-- y tick labels (recall) -->
+  <text x="56" y="52" class="muted" text-anchor="end">1.0</text>
+  <text x="56" y="131" class="muted" text-anchor="end">0.75</text>
+  <text x="56" y="210" class="muted" text-anchor="end">0.50</text>
+  <text x="56" y="289" class="muted" text-anchor="end">0.25</text>
+  <text x="56" y="368" class="muted" text-anchor="end">0</text>
+
+  <!-- x tick labels (ms) -->
+  <text x="64" y="382" class="muted" text-anchor="middle">0</text>
+  <text x="204.4" y="382" class="muted" text-anchor="middle">2</text>
+  <text x="344.9" y="382" class="muted" text-anchor="middle">4</text>
+  <text x="485.3" y="382" class="muted" text-anchor="middle">6</text>
+  <text x="625.8" y="382" class="muted" text-anchor="middle">8</text>
+
+  <!-- axis titles -->
+  <text x="380" y="404" class="muted" text-anchor="middle">p95 query latency (ms)</text>
+  <text x="20" y="206" class="muted" text-anchor="middle" transform="rotate(-90 20 206)">recall@10</text>
+
+  <!-- tradeoff curve -->
+  <polyline class="curve" points="123.0,252.8 163.0,208.5 193.9,156.7 264.1,104.3 394.0,72.3 610.3,57.5"/>
+
+  <!-- points + ef labels -->
+  <circle class="pt" cx="123.0" cy="252.8" r="4"/>
+  <text x="123.0" y="240.8" class="muted" text-anchor="middle">ef=10</text>
+  <circle class="pt" cx="163.0" cy="208.5" r="4"/>
+  <text x="163.0" y="196.5" class="muted" text-anchor="middle">ef=20</text>
+  <circle class="pt" cx="193.9" cy="156.7" r="4"/>
+  <text x="205.9" y="150.7" class="muted" text-anchor="start">ef=40</text>
+  <circle class="pt" cx="264.1" cy="104.3" r="4"/>
+  <text x="276.1" y="98.3" class="muted" text-anchor="start">ef=80</text>
+  <circle class="pt" cx="394.0" cy="72.3" r="4"/>
+  <text x="394.0" y="60.3" class="muted" text-anchor="middle">ef=160</text>
+  <circle class="pt" cx="610.3" cy="57.5" r="4"/>
+  <text x="610.3" y="45.5" class="muted" text-anchor="middle">ef=320</text>
+</svg>
