@@ -36,10 +36,11 @@ import threading
 import time
 
 import numpy as np
-from fastapi import FastAPI, HTTPException, Response
+from fastapi import Depends, FastAPI, HTTPException, Response
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from pydantic import BaseModel, Field
 
+from vectorforge.auth import make_api_key_dependency
 from vectorforge.benchmark import RecallBenchmark
 from vectorforge.filtering import compile_equality_filter
 from vectorforge.hnsw import HNSWIndex
@@ -97,8 +98,12 @@ class HealthResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-def create_app(index: HNSWIndex) -> FastAPI:
-    """Build a FastAPI app serving *index*."""
+def create_app(index: HNSWIndex, api_key: str | None = None) -> FastAPI:
+    """Build a FastAPI app serving *index*.
+
+    *api_key* guards the write endpoints. It defaults to ``VECTORFORGE_API_KEY``
+    from the environment; when neither is set, the write endpoints are open.
+    """
     app = FastAPI(
         title="VectorForge",
         description="Distributed vector search engine — HNSW core, REST surface.",
@@ -108,10 +113,13 @@ def create_app(index: HNSWIndex) -> FastAPI:
     metrics = Metrics()
     app.state.metrics = metrics
 
+    effective_key = api_key if api_key is not None else os.environ.get("VECTORFORGE_API_KEY")
+    require_write = Depends(make_api_key_dependency(effective_key))
+
     def _as_vector(values: list[float]) -> np.ndarray:
         return np.asarray(values, dtype=np.float32)
 
-    @app.post("/index", status_code=201)
+    @app.post("/index", status_code=201, dependencies=[require_write])
     def index_vector(req: IndexRequest) -> dict[str, str]:
         try:
             index.add(req.id, _as_vector(req.vector), metadata=req.metadata)
@@ -137,7 +145,7 @@ def create_app(index: HNSWIndex) -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return SearchResponse(results=[Neighbor(id=vid, distance=dist) for vid, dist in hits])
 
-    @app.delete("/vectors/{vector_id}")
+    @app.delete("/vectors/{vector_id}", dependencies=[require_write])
     def delete_vector(vector_id: str) -> dict[str, str]:
         if not index.delete(vector_id):
             raise HTTPException(status_code=404, detail=f"Unknown vector id {vector_id!r}")
