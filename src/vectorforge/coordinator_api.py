@@ -19,9 +19,10 @@ import os
 
 import grpc
 import numpy as np
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 
 from vectorforge.api import IndexRequest, Neighbor, SearchRequest, SearchResponse
+from vectorforge.auth import make_api_key_dependency
 from vectorforge.coordinator import Coordinator, GrpcShardClient
 
 # Map the shard-side error codes onto HTTP, whether they arrive as a local
@@ -42,8 +43,12 @@ def _http_error_from_shard(exc: Exception) -> HTTPException:
     raise exc
 
 
-def create_coordinator_app(coordinator: Coordinator) -> FastAPI:
-    """Build a FastAPI app that serves requests through *coordinator*."""
+def create_coordinator_app(coordinator: Coordinator, api_key: str | None = None) -> FastAPI:
+    """Build a FastAPI app that serves requests through *coordinator*.
+
+    *api_key* guards the write endpoints, defaulting to ``VECTORFORGE_API_KEY``
+    from the environment; unset on both means the write endpoints are open.
+    """
     app = FastAPI(
         title="VectorForge Coordinator",
         description="Public REST surface fanning out to VectorForge shards.",
@@ -51,10 +56,13 @@ def create_coordinator_app(coordinator: Coordinator) -> FastAPI:
     )
     app.state.coordinator = coordinator
 
+    effective_key = api_key if api_key is not None else os.environ.get("VECTORFORGE_API_KEY")
+    require_write = Depends(make_api_key_dependency(effective_key))
+
     def _as_vector(values: list[float]) -> np.ndarray:
         return np.asarray(values, dtype=np.float32)
 
-    @app.post("/index", status_code=201)
+    @app.post("/index", status_code=201, dependencies=[require_write])
     def index_vector(req: IndexRequest) -> dict[str, str]:
         try:
             shard = coordinator.index(req.id, _as_vector(req.vector), metadata=req.metadata)
@@ -72,7 +80,7 @@ def create_coordinator_app(coordinator: Coordinator) -> FastAPI:
             raise _http_error_from_shard(exc) from exc
         return SearchResponse(results=[Neighbor(id=vid, distance=dist) for vid, dist in hits])
 
-    @app.delete("/vectors/{vector_id}")
+    @app.delete("/vectors/{vector_id}", dependencies=[require_write])
     def delete_vector(vector_id: str) -> dict[str, str]:
         if not coordinator.delete(vector_id):
             raise HTTPException(status_code=404, detail=f"Unknown vector id {vector_id!r}")
