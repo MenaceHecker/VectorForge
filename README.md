@@ -155,6 +155,22 @@ curl -X POST localhost:8000/search \
   -d '{"vector": [0.1, 0.2, ...], "k": 10, "filter": {"lang": "en"}}'
 ```
 
+### Authentication
+
+The write endpoints (`POST /index` and `DELETE /vectors/{id}`) can require an API
+key. Set `VECTORFORGE_API_KEY` and pass it back in the `X-API-Key` header; search
+and health stay open either way. With no key set, writes are open, which keeps
+local development friction free.
+
+```bash
+VECTORFORGE_API_KEY=secret uvicorn vectorforge.api:app
+
+curl -X POST localhost:8000/index \
+  -H 'content-type: application/json' \
+  -H 'X-API-Key: secret' \
+  -d '{"id": "doc-1", "vector": [0.1, 0.2, ...]}'
+```
+
 ### Running in Docker
 
 ```bash
