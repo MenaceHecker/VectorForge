@@ -23,6 +23,10 @@ htmlcov/
 *.vfidx
 data/
 
+# Generated benchmark datasets and results
+*.npz
+*.tmp
+
 # Generated gRPC stubs (regenerate with protoc; see README)
 *_pb2.py
 *_pb2_grpc.py
