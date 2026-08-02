@@ -1,0 +1,33 @@
+# Keep the Docker build context small and reproducible: none of this belongs in
+# the image or affects the build, and shipping it just slows the context upload.
+.git
+.gitignore
+.github
+
+.venv
+venv
+env
+
+__pycache__
+*.py[cod]
+.pytest_cache
+.ruff_cache
+.coverage
+htmlcov
+
+tests
+k8s
+monitoring
+locust
+scripts
+docs
+
+# Generated and local artifacts
+*_pb2.py
+*_pb2_grpc.py
+*.vfidx
+*.npz
+*.tmp
+data
+.env
+.DS_Store
